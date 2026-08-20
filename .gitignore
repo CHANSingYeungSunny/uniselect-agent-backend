@@ -1,25 +1,16 @@
-# Build output
+# Repo root: only the uniselect-cs-agent project is tracked.
+# Ignore local-only working-set artifacts and editor/agent metadata.
+.codebuddy/
+.vscode/
+*.iml
+.idea/
+oracleJdk-26/
+_keep/
+_git_push.ps1
+tracked_now.txt
+
+# Build output (handled inside uniselect-cs-agent/.gitignore too)
 target/
 bin/
 build/
 out/
-
-# IDE
-.idea/
-*.iml
-.vscode/
-*.iml
-.vscode/
-
-# OS
-Thumbs.db
-Desktop.ini
-
-# Local sensitive
-.env
-.env.*
-!.env.example
-
-# JDK distribution accidentally copied into repo
-oracleJdk-26/
-_keep/
