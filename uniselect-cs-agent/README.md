@@ -50,7 +50,7 @@ flowchart TD
     N --> R
     P --> R
 
-    classDef red fill:#ffe0e0,stroke:#c00;
+    classDef red fill:#fde2e2,stroke:#b91c1c,color:#7f1d1d;
     class C,D,E,E2,F,F2,N,P red;
 ```
 
