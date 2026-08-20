@@ -132,6 +132,20 @@
   .bubble.revoke { border-color: var(--revoke); background: #f7f0fc; color: #6d3a99; }
   .bubble.error { border-color: var(--error); background: #fdf0ef; color: #c0392b; }
 
+  /* 导购商品推荐卡片 */
+  .bubble.product-card {
+    background: #f7f8fa; border-left: 4px solid var(--primary);
+    border-radius: 10px; padding: 12px 14px; max-width: 80%;
+    box-shadow: 0 1px 3px rgba(0,0,0,.06); line-height: 1.6;
+  }
+  .bubble.product-card .pc-name { font-weight: 700; font-size: 14px; color: var(--text); }
+  .bubble.product-card .pc-price { color: #e4393c; font-weight: 600; margin: 4px 0; font-size: 14px; }
+  .bubble.product-card .pc-reason { color: var(--text-sub); font-size: 12px; }
+  .bubble.product-card .pc-tag {
+    display: inline-block; font-size: 11px; font-weight: 600; color: #fff;
+    background: var(--primary); border-radius: 3px; padding: 1px 8px; margin-bottom: 6px;
+  }
+
   /* 输入区 */
   .input-bar {
     background: var(--panel); border-top: 1px solid var(--border);
@@ -198,6 +212,26 @@
       4. 多商家隔离 · M-1002 追加词
       <span class="tag">M-1002 商家配置了追加词"客服不理人"，验证按商家路由</span>
     </button>
+
+    <h3>🛒 导购测试场景</h3>
+    <button class="quick" data-api="shopping" data-mid="M-1001" data-sid="s1" data-msg="我想买个保温杯">
+      5. 导购混合召回与排序
+      <span class="tag">调用 /api/shopping/recommend，SSE 逐条推送带推荐理由的商品卡片</span>
+    </button>
+    <button class="quick" data-api="shopping" data-mid="M-1001" data-sid="s1" data-msg="这个怎么退款？">
+      6. 客服↔导购状态协同
+      <span class="tag">导购会话提及"退款"→ 命中网关前置拦截，瞬间转人工</span>
+    </button>
+
+    <h3>演示模式（手动输入用）</h3>
+    <div style="display:flex; gap:8px; margin-bottom:12px;">
+      <label style="display:flex; align-items:center; gap:4px; font-size:13px; cursor:pointer;">
+        <input type="radio" name="mode" value="cs" checked> 客服
+      </label>
+      <label style="display:flex; align-items:center; gap:4px; font-size:13px; cursor:pointer;">
+        <input type="radio" name="mode" value="shopping"> 导购
+      </label>
+    </div>
 
     <div class="hint">
       说明：后端为 Mock 模式，LLM 模拟流式输出（每 chunk 50ms）。<br>
@@ -342,6 +376,14 @@
         currentAi = null;
         addBubble('error', data, '错误');
         break;
+      case 'product':
+        try {
+          var pd = JSON.parse(data);
+          renderProduct(pd);
+        } catch (e) {
+          // 损坏的 product 数据：静默忽略，绝不让整个页面崩溃
+        }
+        break;
       case 'done':
         if (currentAi) currentAi.classList.remove('typing');
         currentAi = null;
@@ -349,6 +391,35 @@
       default:
         break;
     }
+  }
+
+  // 渲染导购商品卡片（字段取 name||productName 兼容；全部用 textContent 防 XSS）
+  function renderProduct(d) {
+    if (!d) return;
+    var name = d.name || d.productName || '未知商品';
+    var price = (typeof d.price === 'number') ? ('¥' + d.price.toFixed(2)) : (d.price || '');
+    var reason = d.reason || '';
+    var sku = d.skuId || '';
+
+    var row = el('div', 'msg');
+    var avatar = el('div', 'avatar', '🛒');
+    var bubble = el('div', 'bubble product-card');
+
+    if (sku) {
+      var tagEl = el('span', 'pc-tag', sku);
+      bubble.appendChild(tagEl);
+    }
+    var nameEl = el('div', 'pc-name', name);
+    var priceEl = el('div', 'pc-price', price);
+    var reasonEl = el('div', 'pc-reason', reason);
+    bubble.appendChild(nameEl);
+    bubble.appendChild(priceEl);
+    bubble.appendChild(reasonEl);
+
+    row.appendChild(avatar);
+    row.appendChild(bubble);
+    msgList.appendChild(row);
+    scrollBottom();
   }
 
   // 从 SSE 文本块提取并解析一个事件（兼容 SseEmitter 与拦截器短路两种格式）
@@ -426,11 +497,17 @@
     stateText.textContent = busy ? 'AI 正在流式输出…' : '';
   }
 
-  function send() {
+  function send(api) {
     var merchantId = merchantSel.value.trim();
     var sessionId = sessionInput.value.trim() || 's1';
     var message = msgInput.value.trim();
     if (!message) return;
+
+    // 场景模式：按钮 data-api 优先，否则取手动输入的模式单选（默认客服）
+    var mode = api || (function () {
+      var checked = document.querySelector('input[name="mode"]:checked');
+      return checked ? checked.value : 'cs';
+    })();
 
     // merchant_id 格式校验（与后端红线一致）
     if (!/^M-[A-Za-z0-9]{2,31}$/.test(merchantId)) {
@@ -442,12 +519,21 @@
     msgInput.value = '';
     setBusy(true);
 
-    var url = BASE + '/api/cs/chat?' + new URLSearchParams({ sessionId: sessionId, merchantId: merchantId, message: message });
+    // 导购走 /api/shopping/recommend（参数名 userQuery），不触发"动态知识库"Loading
+    var isShopping = (mode === 'shopping');
+    var url;
+    if (isShopping) {
+      url = BASE + '/api/shopping/recommend?' +
+        new URLSearchParams({ merchantId: merchantId, sessionId: sessionId, userQuery: message });
+    } else {
+      url = BASE + '/api/cs/chat?' +
+        new URLSearchParams({ sessionId: sessionId, merchantId: merchantId, message: message });
+    }
 
     // 命中"库存/价格/货"关键词 → 先展示"动态知识库查询"Loading（600~800ms），
     // 结束后再发起 SSE，让"先查实时数据、再流式回答"的动静态分离链路清晰可见
     var isInjection = INJECTION_KEYWORDS.test(message);
-    var prep = (!isInjection && DYNAMIC_KEYWORDS.test(message)) ? showDynamicLoading() : Promise.resolve();
+    var prep = (!isShopping && !isInjection && DYNAMIC_KEYWORDS.test(message)) ? showDynamicLoading() : Promise.resolve();
 
     prep.then(function () {
       return fetch(url, { headers: { Accept: 'text/event-stream' } });
@@ -488,7 +574,7 @@
       merchantSel.value = btn.getAttribute('data-mid');
       sessionInput.value = btn.getAttribute('data-sid');
       msgInput.value = btn.getAttribute('data-msg');
-      send();
+      send(btn.getAttribute('data-api') || null);
     });
   });
 
