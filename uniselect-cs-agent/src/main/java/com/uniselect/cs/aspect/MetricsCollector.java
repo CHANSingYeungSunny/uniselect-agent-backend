@@ -43,4 +43,28 @@ public interface MetricsCollector {
     default String observeLastLayer2Thread() {
         return null;
     }
+
+    // ==================== 导购 Agent 埋点（event_id 幂等） ====================
+
+    /** 推荐曝光（展示候选）：event_id 唯一，重复提交应被幂等去重 */
+    void recordRecommendImpression(String merchantId, String sessionId, String skuId, String eventId);
+
+    /** 推荐点击 */
+    void recordRecommendClick(String merchantId, String sessionId, String skuId, String eventId);
+
+    /** 推荐加购 */
+    void recordRecommendAddCart(String merchantId, String sessionId, String skuId, String eventId);
+
+    /** 推荐下单 */
+    void recordRecommendOrder(String merchantId, String sessionId, String skuId, String eventId);
+
+    /**
+     * 观察点（测试/监控用）：导购某类埋点的<b>净计次</b>（已按 event_id 幂等去重后）。
+     * 默认实现返回 0；Mock 实现返回真实计数，用于回归锁定"幂等去重"红线。
+     *
+     * @param type 取值 {@code impression / click / add_cart / order}
+     */
+    default long observeRecommendCount(String type) {
+        return 0L;
+    }
 }

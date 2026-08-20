@@ -20,7 +20,7 @@
 | 4 | **多轮上下文：滑窗 + 摘要** | 环形缓冲滑窗 + Token 预算；超预算自动压缩为摘要；TTL 过期；并发安全 |
 | 5 | **异步埋点、不阻塞主链路** | `MetricsCollector` 运行在独立线程池（`@Async`），永不阻塞 SSE 主流程 |
 
-5 条红线均有 **11/11 回归测试** 覆盖（`SessionContextServiceMockTest`、`PromptAssemblerTest`、`MetricsCollectorMockTest`）。
+5 条客服红线均有 **11/11 回归测试** 覆盖（`SessionContextServiceMockTest`、`PromptAssemblerTest`、`MetricsCollectorMockTest`）；导购另有 **6 条红线回归测试**（`ShoppingGuideRedLineTest` + `ProductRecallServiceTest` + `ProductRankerTest`）。
 
 ---
 
@@ -50,11 +50,73 @@ flowchart TD
     N --> R
     P --> R
 
-    classDef red fill:#dc2626,stroke:#991b1b,color:#ffffff;
+    classDef red fill:#ffe0e0,stroke:#c00,color:#330000,stroke-width:2px;
     class C,D,E,E2,F,F2,N,P red;
 ```
 
 **主链路：** 网关预判（租户隔离 + 转人工短路 + 注入短路）→ 意图识别 + 并行工具预取 → RAG 检索 → Prompt 组装 → LLM 流式输出 → 第二层流式扫描 → 第三层终检 → 异步埋点。
+
+### 3.1 导购 Agent 分支（与客服共享网关与基建）
+
+```mermaid
+flowchart TD
+    SA["客户端: GET /api/shopping/recommend?merchantId=..&sessionId=..&userQuery=.."] --> SB["CsGatewayInterceptor 复用<br/>(merchant_id 校验 + 转人工/注入短路)"]
+    SB --> SC{"merchant_id 校验"}
+    SC -- 缺失/非法 --> SD["403 隔离 · 绝不兜底默认商家"]
+    SC -- 通过 --> SE["状态机迁移<br/>客服态↔导购态↔售后态↔人工态"]
+    SE --> SF["混合召回<br/>向量+关键词+规则池 (merchant_id 命名空间)"]
+    SF --> SG["实时过滤<br/>库存>0 / 上架 / 价格≤预算 / 活动有效"]
+    SG --> SH["四维加权排序<br/>归一化 0.4/0.2/0.2/0.2 + 库存分段 + 多样性"]
+    SH --> SI{"有候选?"}
+    SI -- 否 --> SJ["SSE degrade 降级<br/>不凑数"]
+    SI -- 是 --> SK["SSE 流式<br/>message 理由 + product 逐个"]
+    SK --> SL["done + 异步埋点<br/>impression/click/add_cart/order (event_id 幂等)"]
+```
+
+**导购链路：** 网关隔离（复用）→ 状态机迁移 → 混合召回（三路合并去重 + 实时过滤）→ 四维加权排序（多样性控制）→ SSE 流式推荐（message + product）→ done + 异步埋点（幂等）。
+
+---
+
+## 3.x 导购 Agent（Shopping Guide）
+
+> 与客服模块共享同一网关隔离、SSE 模板、异步埋点、多轮上下文基建；仅新增 `com.uniselect.cs.shopping` 包，零侵入复用，不破坏现有客服链路。
+
+### 接口
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/shopping/recommend` | 导购推荐（SSE）。参数：`merchantId`（必填，隔离）、`sessionId`（必填）、`userQuery`（查询词）、`budget`（可选预算，默认 0 不限） |
+
+SSE 事件类型：`message`（推荐理由/导语）+ `product`（逐商品，携带 `RankedProduct` 详情与名次）+ `done`（结束）+ `degrade`（无候选降级，不凑数）。
+
+### 核心能力
+
+- **混合召回**：向量（Top-K=10，超时 100ms 降级）+ 关键词精确匹配 + 规则候选池，三路合并按 `sku_id` 去重保高分；全程 `merchant_id` 命名空间隔离。
+- **实时过滤**：库存 > 0、上架（`status=1`）、价格 ≤ 预算、活动有效期内。
+- **四维排序**：相关性 / 价格优势 / 活动力度 / 库存紧张度，先各自归一化到 0~1 再加权（0.4 / 0.2 / 0.2 / 0.2）；库存紧张度分段（≤5→0.9，6~20→0.5，>20→0.2）；多样性控制（同子品类 ≤ 半数）。
+- **会话状态机**：`CUSTOMER_SERVICE / SHOPPING_GUIDE / AFTER_SALES / HANDOFF`，切换生成一次 ≤500 字摘要。
+- **异步埋点**：`impression / click / add_cart / order`，以 `event_id` 幂等去重。
+
+### 演示（curl）
+
+```bash
+# 导购推荐（M-1001，预算 200）
+curl -N "http://localhost:8080/api/shopping/recommend?merchantId=M-1001&sessionId=s1&userQuery=%E6%83%B3%E4%B9%B0%E4%B8%AA%E4%BF%9D%E6%B8%A9%E6%9D%AF&budget=200"
+
+# 跨商家隔离验证：M-1002 查不到 M-1001 的商品（返回空/降级）
+curl -N "http://localhost:8080/api/shopping/recommend?merchantId=M-1002&sessionId=s2&userQuery=%E4%BF%9D%E6%B8%A9%E6%9D%AF"
+```
+
+### 导购红线（回归测试）
+
+1. **跨店隔离**：A 商家（`M-1001`）绝看不到 B 商家（`M-1002`）商品。
+2. **库存过滤**：库存 ≤ 0 不进入候选。
+3. **预算过滤**：价格 > 预算不进入候选。
+4. **多样性**：Top-N 中同一子品类 ≤ 半数。
+5. **降级**：无候选时发 `degrade`，绝不凑数。
+6. **埋点幂等**：同一 `event_id` 仅计一次。
+
+> 数据层：`src/main/resources/db/migration/V2__shopping_guide_tables.sql` 提供 `product_catalog` / `product_embeddings`(pgvector) / `recommendation_events` 三表 DDL，供后续无缝切换真实库；本期运行期仍走 Mock 内存实现，不连库。
 
 ---
 

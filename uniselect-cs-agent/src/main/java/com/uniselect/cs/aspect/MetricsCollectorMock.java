@@ -31,6 +31,14 @@ public class MetricsCollectorMock implements MetricsCollector {
     private final AtomicLong toolUseCount = new AtomicLong();
     private final AtomicReference<String> lastLayer2ThreadName = new AtomicReference<>();
 
+    // 导购埋点：event_id 幂等去重（ConcurrentHashMap 天然 putIfAbsent 语义）
+    private final java.util.Set<String> recommendEventIds
+            = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final AtomicLong recommendImpressionCount = new AtomicLong();
+    private final AtomicLong recommendClickCount = new AtomicLong();
+    private final AtomicLong recommendAddCartCount = new AtomicLong();
+    private final AtomicLong recommendOrderCount = new AtomicLong();
+
     @Async("metricsExecutor")
     @Override
     public void recordHandoffTriggered(String merchantId, String sessionId, String source, long elapsedNanos) {
@@ -100,5 +108,72 @@ public class MetricsCollectorMock implements MetricsCollector {
         long c = toolUseCount.incrementAndGet();
         log.info("[metric] tooluse_latency count={} merchantId={} sessionId={} intent={} costMs={} degraded={}",
                 c, merchantId, sessionId, intent, elapsedNanos / 1_000_000.0, degraded);
+    }
+
+    // ==================== 导购推荐埋点（event_id 幂等去重） ====================
+
+    @Async("metricsExecutor")
+    @Override
+    public void recordRecommendImpression(String merchantId, String sessionId, String skuId, String eventId) {
+        if (!dedupEvent(eventId)) {
+            return; // 幂等：重复 event_id 丢弃，不计次
+        }
+        long c = recommendImpressionCount.incrementAndGet();
+        log.info("[metric] recommend_impression count={} merchantId={} sessionId={} skuId={} eventId={}",
+                c, merchantId, sessionId, skuId, eventId);
+    }
+
+    @Async("metricsExecutor")
+    @Override
+    public void recordRecommendClick(String merchantId, String sessionId, String skuId, String eventId) {
+        if (!dedupEvent(eventId)) {
+            return;
+        }
+        long c = recommendClickCount.incrementAndGet();
+        log.info("[metric] recommend_click count={} merchantId={} sessionId={} skuId={} eventId={}",
+                c, merchantId, sessionId, skuId, eventId);
+    }
+
+    @Async("metricsExecutor")
+    @Override
+    public void recordRecommendAddCart(String merchantId, String sessionId, String skuId, String eventId) {
+        if (!dedupEvent(eventId)) {
+            return;
+        }
+        long c = recommendAddCartCount.incrementAndGet();
+        log.info("[metric] recommend_add_cart count={} merchantId={} sessionId={} skuId={} eventId={}",
+                c, merchantId, sessionId, skuId, eventId);
+    }
+
+    @Async("metricsExecutor")
+    @Override
+    public void recordRecommendOrder(String merchantId, String sessionId, String skuId, String eventId) {
+        if (!dedupEvent(eventId)) {
+            return;
+        }
+        long c = recommendOrderCount.incrementAndGet();
+        log.info("[metric] recommend_order count={} merchantId={} sessionId={} skuId={} eventId={}",
+                c, merchantId, sessionId, skuId, eventId);
+    }
+
+    /** event_id 幂等：首次出现返回 true 并登记，重复返回 false */
+    private boolean dedupEvent(String eventId) {
+        if (eventId == null || eventId.isBlank()) {
+            // 无 event_id 视为非幂等来源，放行（真实接入应强制要求 event_id）
+            return true;
+        }
+        return recommendEventIds.add(eventId);
+    }
+
+    /** 观察点：导购某类埋点已被幂等去重后的净计次（测试用） */
+    @Override
+    public long observeRecommendCount(String type) {
+        return switch (type) {
+            case "impression" -> recommendImpressionCount.get();
+            case "click" -> recommendClickCount.get();
+            case "add_cart" -> recommendAddCartCount.get();
+            case "order" -> recommendOrderCount.get();
+            default -> 0L;
+        };
     }
 }

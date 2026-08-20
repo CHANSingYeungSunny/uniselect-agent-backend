@@ -46,3 +46,31 @@ uniselect:
       compact-rounds: 3
       # TTL：24h 无活动过期（毫秒）
       ttl-ms: 86400000
+    shopping:
+      # 导购 SSE 超时（毫秒），长商品列表需 ≥30s 避免截断
+      sse-timeout-ms: 30000
+      recall:
+        # 向量召回 Top-K（默认 10）
+        vector-top-k: 10
+        # 向量召回超时保护（毫秒），超时降级为空不阻塞
+        vector-timeout-ms: 100
+        # 关键词召回 Top-K
+        keyword-top-k: 10
+        # 规则候选池 Top-K（运营精选/搭配推荐）
+        rule-pool-top-k: 10
+        # 三路召回合并总预算（毫秒）
+        merge-budget-ms: 300
+        # 活动有效期校验缓冲（毫秒），未配置起止视为长期有效
+        promotion-buffer-ms: 0
+      ranking:
+        # 最终输出 Top-N（默认 5）
+        top-n: 5
+        # 四维权重（归一化后加权，需合计=1.0）
+        weight-relevance: 0.4
+        weight-price: 0.2
+        weight-promotion: 0.2
+        weight-inventory: 0.2
+        # 多样性控制：同一子品类最多占比（≤0.5 即半数）
+        max-same-subcategory-ratio: 0.5
+        # 排序预算（毫秒），超时降级为召回序
+        budget-ms: 100
