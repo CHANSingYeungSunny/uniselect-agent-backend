@@ -1,0 +1,48 @@
+server:
+  port: 8080
+  # SSE 长连接不限制超时（由 SseEmitter 超时控制），关闭 MVC 异步请求默认超时干扰
+  servlet:
+    async:
+      request-timeout: -1
+
+spring:
+  application:
+    name: uniselect-cs-agent
+  # 本步骤不接入 pgvector / Redis / 真实 LLM，使用 Mock 内存实现跑通主流程
+  profiles:
+    active: mock
+
+uniselect:
+  cs:
+    sse:
+      # SseEmitter 超时（毫秒）。-1 表示不超时，由业务侧控制结束。
+      timeout-ms: 60000
+    gateway:
+      # 是否启用前置拦截器（merchant_id 校验 + 转人工预判）
+      interceptor-enabled: true
+      # merchant_id 格式：以 "M-" 开头 + 字母数字，长度 3~32。仅做格式校验，不查库。
+      merchant-id-pattern: "^M-[A-Za-z0-9]{2,31}$"
+    handoff:
+      # 转人工预判超时保护：理论上 < 10ms，此为兜底上限（毫秒），超时即视为未命中走正常链路
+      predict-timeout-ms: 50
+    tooluse:
+      # Tool Use 预取模式超时（评审建议 3.3：预取模式放宽到 3s）
+      prefetch-timeout-ms: 3000
+    rag:
+      # RAG 静态层检索超时（评审建议 2.2：超时 100ms 即降级空结果）
+      timeout-ms: 100
+      top-k: 5
+    llm:
+      # 每个 chunk 推送间隔（毫秒），模拟流式首 token 快、后续增量
+      chunk-delay-ms: 50
+      # 主供应商（doubao）失败率，触发 router 无缝切换备（deepseek）
+      primary-fail-rate: 0.1
+    context:
+      # 多轮上下文：滑动窗口保留最近轮数
+      max-rounds: 8
+      # Token 防爆：累计字符估算上限，超阈值触发摘要压缩
+      max-chars: 2000
+      # 摘要压缩：将最早 N 轮合并为一条摘要
+      compact-rounds: 3
+      # TTL：24h 无活动过期（毫秒）
+      ttl-ms: 86400000
